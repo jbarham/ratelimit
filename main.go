@@ -16,14 +16,17 @@ import (
 )
 
 var (
+	count     = flag.Int("jobs", 20, "number of jobs to run")
 	threads   = flag.Int("threads", 5, "number of worker threads")
-	count     = flag.Int("count", 20, "number of jobs to run")
-	limit     = flag.Int("limit", 10, "rate limit jobs/s")
+	limit     = flag.Int("limit", 10, "rate limit of jobs/s")
 	errorExit = flag.Bool("error", false, "return error for middle job")
 )
 
 func main() {
 	flag.Parse()
+	if *count < 1 {
+		log.Fatal("-jobs must be >= 1")
+	}
 	if *threads < 1 {
 		log.Fatal("-threads must be >= 1")
 	}
@@ -33,6 +36,7 @@ func main() {
 
 	log.SetFlags(log.Flags() | log.Lmicroseconds)
 
+	// Based on https://gist.github.com/pteich/c0bb58b0b7c8af7cc6a689dd0d3d26ef
 	ctx, cancel := context.WithCancel(context.Background())
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -75,6 +79,8 @@ func main() {
 		})
 	}
 
+	njobs := 0
+
 	// Start main thread to generate jobs
 	g.Go(func() error {
 		defer close(jobs) // Signals worker threads to finish
@@ -83,18 +89,15 @@ func main() {
 			log.Printf("Main thread finished")
 		}()
 
-		n := 0
-		for i := 0; ; i += 1 {
+		for i := 0; i < *count; i += 1 {
 			select {
 			case jobs <- i:
 			case <-gctx.Done():
 				return gctx.Err()
 			}
-			n += 1
-			if *count > 0 && n == *count {
-				return nil
-			}
+			njobs += 1
 		}
+		return nil
 	})
 
 	// Thread to check for signals to gracefully finish all functions
@@ -126,9 +129,9 @@ func main() {
 			log.Printf("Received error: %v", err)
 		}
 	} else {
-		runTime := time.Now().Sub(start).Seconds()
-		runRate := float64(*count) / runTime
 		log.Println("Finished clean")
-		log.Printf("Processed %d jobs processed in %.2f/s at rate of %.1f jobs/s (vs rate limit of %d jobs/s)", *count, runTime, runRate, *limit)
 	}
+	runTime := time.Now().Sub(start).Seconds()
+	runRate := float64(njobs) / runTime
+	log.Printf("Processed %d jobs in %.2f/s at rate of %.1f jobs/s (vs rate limit of %d jobs/s)", njobs, runTime, runRate, *limit)
 }
